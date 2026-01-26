@@ -109,7 +109,14 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     args.stereo = False
-    torch.multiprocessing.set_start_method('spawn')
+    try:
+        torch.multiprocessing.set_start_method('fork')
+    except RuntimeError:
+        pass  # method already set
+
+    # Disable visualization in async mode to avoid CUDA initialization errors in child processes on WSL2
+    if args.asynchronous:
+        args.disable_vis = True
 
     droid = None
 
