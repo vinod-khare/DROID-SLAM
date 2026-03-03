@@ -23,7 +23,7 @@ def show_image(image):
     cv2.imshow('image', image / 255.0)
     cv2.waitKey(1)
 
-def image_stream(imagedir, calib, stride):
+def image_stream(imagedir, calib, stride, camera_model):
     """ image generator """
 
     calib = np.loadtxt(calib, delimiter=" ")
@@ -40,7 +40,11 @@ def image_stream(imagedir, calib, stride):
     for t, imfile in enumerate(image_list):
         image = cv2.imread(os.path.join(imagedir, imfile))
         if len(calib) > 4:
-            image = cv2.undistort(image, K, calib[4:])
+            if camera_model == "fisheye":
+                map1, map2 = cv2.fisheye.initUndistortRectifyMap(K, calib[4:], np.eye(3), K, image.shape[:2][::-1], cv2.CV_32F)
+                image = cv2.remap(image, map1, map2, cv2.INTER_LINEAR)
+            else:
+                image = cv2.undistort(image, K, calib[4:])
 
         h0, w0, _ = image.shape
         h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
@@ -57,7 +61,7 @@ def image_stream(imagedir, calib, stride):
         yield t, image[None], intrinsics
 
 
-def save_reconstruction(droid, save_path):
+def save_reconstruction(droid, save_path, poses_all=None, tstamps_all=None):
 
     if hasattr(droid, "video2"):
         video = droid.video2
@@ -72,6 +76,12 @@ def save_reconstruction(droid, save_path):
         "poses": video.poses[:t].cpu(),
         "intrinsics": video.intrinsics[:t].cpu()
     }
+
+    if poses_all is not None:
+        save_data["poses_all"] = torch.as_tensor(poses_all).cpu()
+
+    if tstamps_all is not None:
+        save_data["tstamps_all"] = torch.as_tensor(tstamps_all).cpu()
 
     torch.save(save_data, save_path)
 
@@ -105,6 +115,7 @@ if __name__ == '__main__':
     parser.add_argument("--frontend_device", type=str, default="cuda")
     parser.add_argument("--backend_device", type=str, default="cuda")
     
+    parser.add_argument("--camera-model", type=str, default="radtan", choices=["radtan", "fisheye"], help="Camera model: radtan or fisheye")
     parser.add_argument("--reconstruction_path", help="path to saved reconstruction")
     args = parser.parse_args()
 
@@ -124,10 +135,12 @@ if __name__ == '__main__':
     if args.reconstruction_path is not None:
         args.upsample = True
 
-    tstamps = []
-    for (t, image, intrinsics) in tqdm(image_stream(args.imagedir, args.calib, args.stride)):
+    all_tstamps = []
+    for (t, image, intrinsics) in tqdm(image_stream(args.imagedir, args.calib, args.stride, args.camera_model)):
         if t < args.t0:
             continue
+
+        all_tstamps.append(t)
 
         if not args.disable_vis:
             show_image(image[0])
@@ -138,7 +151,7 @@ if __name__ == '__main__':
         
         droid.track(t, image, intrinsics=intrinsics)
 
-    traj_est = droid.terminate(image_stream(args.imagedir, args.calib, args.stride))
+    traj_est = droid.terminate(image_stream(args.imagedir, args.calib, args.stride, args.camera_model))
     
     if args.reconstruction_path is not None:
-        save_reconstruction(droid, args.reconstruction_path)
+        save_reconstruction(droid, args.reconstruction_path, poses_all=traj_est, tstamps_all=all_tstamps)
