@@ -37,7 +37,8 @@ def image_stream(imagedir, calib, stride, camera_model):
 
     image_list = sorted(os.listdir(imagedir))[::stride]
 
-    for t, imfile in enumerate(image_list):
+    for imfile in image_list:
+        t = float(os.path.splitext(imfile)[0]) * 1e-9
         image = cv2.imread(os.path.join(imagedir, imfile))
         if len(calib) > 4:
             if camera_model == "fisheye":
