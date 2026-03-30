@@ -80,7 +80,7 @@ def convert_reconstruction(filename: str, output_ply: str, output_csv: str,
         tstamps_csv = tstamps
     
     with open(output_csv, 'w', newline='') as csvfile:
-        writer = csv.writer(csvfile)
+        writer = csv.writer(csvfile, delimiter=' ')
         
         # Write header: timestamp, position (x,y,z), quaternion (qx,qy,qz,qw)
         header = ['timestamp', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw']
@@ -91,6 +91,7 @@ def convert_reconstruction(filename: str, output_ply: str, output_csv: str,
         for i in range(n):
             t = tstamps_csv[i]
             pose_mat = pose_mats[i]
+            timestamp = np.int64(t)
             # Extract position (translation)
             position = pose_mat[:3, 3]
             
@@ -99,7 +100,7 @@ def convert_reconstruction(filename: str, output_ply: str, output_csv: str,
             rotation = Rotation.from_matrix(rotation_mat)
             quaternion = rotation.as_quat()  # Returns [qx, qy, qz, qw]
             
-            row = [t] + position.tolist() + quaternion.tolist()
+            row = [str(timestamp)] + position.tolist() + quaternion.tolist()
             writer.writerow(row)
     
     print("Conversion complete!")
