@@ -8,6 +8,7 @@ import cv2
 import os
 import csv
 import argparse
+import yaml
 
 from torch.multiprocessing import Process
 from droid import Droid
@@ -229,6 +230,10 @@ if __name__ == '__main__':
     
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
+        config_path = os.path.join(args.output_dir, "config.yaml")
+        with open(config_path, "w") as f:
+            yaml.dump(vars(args), f, default_flow_style=False)
+        print(f"📝 Config saved to {config_path}")
         print(f"Saving {frame_count} frames to {args.output_dir}")
         save_reconstruction(droid, os.path.join(args.output_dir, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
         export_poses_csv(os.path.join(args.output_dir, "poses.csv"), traj_est, all_tstamps)
