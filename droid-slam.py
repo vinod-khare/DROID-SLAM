@@ -203,6 +203,12 @@ if __name__ == '__main__':
     all_image_files = sorted(os.listdir(args.input_dir))[::args.stride]
     total_images = len(all_image_files)
 
+    print(f"\n📸 Input:  {args.input_dir}  ({total_images} images, stride={args.stride})")
+    print(f"📁 Output: {args.output_dir}")
+    print(f"🎛️  Buffer: {args.buffer} keyframes | filter_thresh={args.filter_thresh} | keyframe_thresh={args.keyframe_thresh}")
+    print(f"⚙️  Mode:   {'async' if args.asynchronous else 'sync'} | upsample={args.upsample}")
+    print()
+
     all_tstamps = []
     frame_count = 0
     for (t, image, intrinsics) in tqdm(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
@@ -225,11 +231,14 @@ if __name__ == '__main__':
         
         droid.track(t, image, intrinsics=intrinsics)
 
+    print(f"\n🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
+
     traj_est = droid.terminate(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp))
     
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
-        print(f"Saving {frame_count} frames to {args.output_dir}")
+        print(f"\n💾 Saving results to {args.output_dir} ...")
         save_reconstruction(droid, os.path.join(args.output_dir, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
         export_poses_csv(os.path.join(args.output_dir, "poses.csv"), traj_est, all_tstamps)
         export_ply(droid, os.path.join(args.output_dir, "reconstruction.ply"))
+        print(f"\n🎉 Done! Results saved to {args.output_dir}")

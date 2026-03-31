@@ -21,6 +21,7 @@ class Droid:
         self.disable_vis = args.disable_vis
 
         # store images, depth, poses, intrinsics (shared between processes)
+        print(f"📦 Allocating keyframe buffer (capacity: {args.buffer} frames, image size: {args.image_size}) ...")
         self.video = DepthVideo(args.image_size, args.buffer, stereo=args.stereo)
 
         # filter incoming frames so that there is enough motion
@@ -37,15 +38,19 @@ class Droid:
             from visualizer.droid_visualizer import visualization_fn
             self.visualizer = Process(target=visualization_fn, args=(self.video, None))
             self.visualizer.start()
+            print("🖥️  Visualizer started")
+        else:
+            print("🙈 Visualization disabled")
 
         # post processor - fill in poses for non-keyframes
         self.traj_filler = PoseTrajectoryFiller(self.net, self.video)
+        print("🚀 DROID-SLAM initialized — ready to track")
 
 
     def load_weights(self, weights):
         """ load trained model weights """
 
-        print(weights)
+        print(f"🧠 Loading model weights from {weights} ...")
         self.net = DroidNet()
         state_dict = OrderedDict([
             (k.replace("module.", ""), v) for (k, v) in torch.load(weights).items()])
@@ -57,6 +62,7 @@ class Droid:
 
         self.net.load_state_dict(state_dict)
         self.net.to("cuda:0").eval()
+        print("✅ Model weights loaded")
 
     def track(self, tstamp, image, depth=None, intrinsics=None):
         """ main thread - update map """
@@ -71,27 +77,31 @@ class Droid:
     def terminate(self, stream=None):
         """ terminate the visualization process, return poses [t, q] """
 
+        print("\n🏁 Tracking complete — running global optimization ...")
         del self.frontend
 
         import time
         torch.cuda.empty_cache()
         t = self.video.counter.value
-        print("#" * 32)
-        print(f"[1/2] Global bundle adjustment — {t} keyframes, 7 steps ...")
+        print(f"\n🔧 [1/2] Global bundle adjustment — {t} keyframes, 7 steps ...")
+        if t > 300:
+            print(f"   ⚠️  Large keyframe count ({t}) — this pass may take a while")
         t0 = time.time()
         self.backend(7)
-        print(f"[1/2] Done ({time.time() - t0:.1f}s)")
+        print(f"   ✅ Pass 1 done ({time.time() - t0:.1f}s)")
 
         torch.cuda.empty_cache()
         t = self.video.counter.value
-        print("#" * 32)
-        print(f"[2/2] Global bundle adjustment — {t} keyframes, 12 steps ...")
+        print(f"\n🔧 [2/2] Global bundle adjustment — {t} keyframes, 12 steps ...")
         if t > 300:
-            print(f"      (large keyframe count — this may take a while)")
+            print(f"   ⚠️  Large keyframe count ({t}) — this pass may take a while")
         t0 = time.time()
         self.backend(12)
-        print(f"[2/2] Done ({time.time() - t0:.1f}s)")
+        print(f"   ✅ Pass 2 done ({time.time() - t0:.1f}s)")
 
+        print("\n📐 Filling in poses for non-keyframes ...")
+        t0 = time.time()
         camera_trajectory = self.traj_filler(stream)
+        print(f"   ✅ Trajectory filled ({time.time() - t0:.1f}s)")
         return camera_trajectory.inv().data.cpu().numpy()
 
