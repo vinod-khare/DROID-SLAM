@@ -77,13 +77,13 @@ class Droid:
     def terminate(self, stream=None):
         """ terminate the visualization process, return poses [t, q] """
 
-        print("\n🏁 Tracking complete — running global optimization ...")
+        print("🏁 Tracking complete — running global optimization ...")
         del self.frontend
 
         import time
         torch.cuda.empty_cache()
         t = self.video.counter.value
-        print(f"\n🔧 [1/2] Global bundle adjustment — {t} keyframes, 7 steps ...")
+        print(f"🔧 [1/2] Global bundle adjustment — {t} keyframes, 7 steps ...")
         if t > 300:
             print(f"   ⚠️  Large keyframe count ({t}) — this pass may take a while")
         t0 = time.time()
@@ -92,14 +92,14 @@ class Droid:
 
         torch.cuda.empty_cache()
         t = self.video.counter.value
-        print(f"\n🔧 [2/2] Global bundle adjustment — {t} keyframes, 12 steps ...")
+        print(f"🔧 [2/2] Global bundle adjustment — {t} keyframes, 12 steps ...")
         if t > 300:
             print(f"   ⚠️  Large keyframe count ({t}) — this pass may take a while")
         t0 = time.time()
         self.backend(12)
         print(f"   ✅ Pass 2 done ({time.time() - t0:.1f}s)")
 
-        print("\n📐 Filling in poses for non-keyframes ...")
+        print("📐 Filling in poses for non-keyframes ...")
         t0 = time.time()
         camera_trajectory = self.traj_filler(stream)
         print(f"   ✅ Trajectory filled ({time.time() - t0:.1f}s)")

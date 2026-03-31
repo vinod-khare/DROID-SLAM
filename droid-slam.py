@@ -99,7 +99,7 @@ def export_poses_csv(output_path, poses_all, tstamps_all):
 
     n = min(len(timestamps), len(pose_mats))
 
-    print(f"Saving poses to {output_path}")
+    print(f"💾 Saving poses to {output_path}")
     with open(output_path, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['timestamp', 'x', 'y', 'z', 'qx', 'qy', 'qz', 'qw'])
@@ -134,12 +134,12 @@ def export_ply(droid, output_path, filter_thresh=0.005, filter_count=2):
     points_np = points[mask].cpu().numpy()
     colors_np = colors[mask].cpu().numpy()
 
-    print(f"Creating point cloud with {len(points_np)} points")
+    print(f"📦 Creating point cloud with {len(points_np)} points")
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points_np)
     pcd.colors = o3d.utility.Vector3dVector(colors_np)
 
-    print(f"Saving point cloud to {output_path}")
+    print(f"💾 Saving point cloud to {output_path}")
     o3d.io.write_point_cloud(output_path, pcd)
 
 
@@ -231,14 +231,14 @@ if __name__ == '__main__':
         
         droid.track(t, image, intrinsics=intrinsics)
 
-    print(f"\n🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
+    print(f"🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
 
     traj_est = droid.terminate(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp))
     
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
-        print(f"\n💾 Saving results to {args.output_dir} ...")
+        print(f"💾 Saving results to {args.output_dir} ...")
         save_reconstruction(droid, os.path.join(args.output_dir, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
         export_poses_csv(os.path.join(args.output_dir, "poses.csv"), traj_est, all_tstamps)
         export_ply(droid, os.path.join(args.output_dir, "reconstruction.ply"))
-        print(f"\n🎉 Done! Results saved to {args.output_dir}")
+        print(f"🎉 Done! Results saved to {args.output_dir}")
