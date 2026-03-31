@@ -14,8 +14,8 @@ OUTPUT_DIR=""
 # Tunable parameters – defaults tuned for a calibrated monocular camera
 # ---------------------------------------------------------------------------
 WEIGHTS="${SCRIPT_DIR}/droid.pth"
-STRIDE=1            # process every frame
-BUFFER=512          # max keyframes in sliding window
+STRIDE=2            # process every frame
+BUFFER=1024         # max keyframes in sliding window
 CAMERA_MODEL="radtan"
 
 # Motion filter: minimum optical-flow magnitude before a frame is considered
@@ -39,7 +39,7 @@ BACKEND_NMS=3
 
 BETA=0.3
 
-DISABLE_VIS=false
+DISABLE_VIS=true    # set to true to disable OpenGL visualizer (requires PyOpenGL and GLFW)
 UPSAMPLE=true       # high-res disparity needed for point cloud export
 
 # ---------------------------------------------------------------------------

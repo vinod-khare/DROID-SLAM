@@ -73,13 +73,24 @@ class Droid:
 
         del self.frontend
 
+        import time
         torch.cuda.empty_cache()
+        t = self.video.counter.value
         print("#" * 32)
+        print(f"[1/2] Global bundle adjustment — {t} keyframes, 7 steps ...")
+        t0 = time.time()
         self.backend(7)
+        print(f"[1/2] Done ({time.time() - t0:.1f}s)")
 
         torch.cuda.empty_cache()
+        t = self.video.counter.value
         print("#" * 32)
+        print(f"[2/2] Global bundle adjustment — {t} keyframes, 12 steps ...")
+        if t > 300:
+            print(f"      (large keyframe count — this may take a while)")
+        t0 = time.time()
         self.backend(12)
+        print(f"[2/2] Done ({time.time() - t0:.1f}s)")
 
         camera_trajectory = self.traj_filler(stream)
         return camera_trajectory.inv().data.cpu().numpy()

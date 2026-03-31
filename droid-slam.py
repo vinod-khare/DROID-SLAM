@@ -198,12 +198,23 @@ if __name__ == '__main__':
     if args.output_dir is not None:
         args.upsample = True
 
+    # Count total images for progress bar
+    import glob as glob_module
+    all_image_files = sorted(os.listdir(args.input_dir))[::args.stride]
+    total_images = len(all_image_files)
+
     all_tstamps = []
-    for (t, image, intrinsics) in tqdm(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp)):
+    frame_count = 0
+    for (t, image, intrinsics) in tqdm(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
+                                         desc="DROID-SLAM tracking",
+                                         total=total_images,
+                                         unit="frame",
+                                         dynamic_ncols=True):
         if t < args.t0:
             continue
 
         all_tstamps.append(t)
+        frame_count += 1
 
         if not args.disable_vis:
             show_image(image[0])
@@ -218,6 +229,7 @@ if __name__ == '__main__':
     
     if args.output_dir is not None:
         os.makedirs(args.output_dir, exist_ok=True)
+        print(f"Saving {frame_count} frames to {args.output_dir}")
         save_reconstruction(droid, os.path.join(args.output_dir, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
         export_poses_csv(os.path.join(args.output_dir, "poses.csv"), traj_est, all_tstamps)
         export_ply(droid, os.path.join(args.output_dir, "reconstruction.ply"))
