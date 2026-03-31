@@ -1,6 +1,7 @@
 python ./droid-slam.py \
-    --input-dir .data/reaper/testoutdoor5/testoutdoor5 \
-    --output-dir .data/reaper/testoutdoor5/droid-slam \
+    --root-folder .data/reaper/testindoor1 \
+    --input-folder testindoor1 \
+    --output-folder droid-slam \
     --calib calib/reaper.txt \
     --buffer 1024 \
     --disable_vis

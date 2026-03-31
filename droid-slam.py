@@ -22,6 +22,18 @@ from lietorch import SE3
 from scipy.spatial.transform import Rotation
 
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+
+def list_image_files(folder):
+    return sorted(
+        f
+        for f in os.listdir(folder)
+        if os.path.isfile(os.path.join(folder, f))
+        and os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
+    )
+
+
 def show_image(image):
     image = image.permute(1, 2, 0).cpu().numpy()
     cv2.imshow('image', image / 255.0)
@@ -39,7 +51,7 @@ def image_stream(imagedir, calib, stride, camera_model, filename_is_timestamp=Fa
     K[1,1] = fy
     K[1,2] = cy
 
-    image_list = sorted(os.listdir(imagedir))[::stride]
+    image_list = list_image_files(imagedir)[::stride]
 
     for frame_idx, imfile in enumerate(image_list):
         if filename_is_timestamp:
@@ -146,7 +158,8 @@ def export_ply(droid, output_path, filter_thresh=0.005, filter_count=2):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir", type=str, help="path to image directory")
+    parser.add_argument("--root-folder", type=str, default=None, help="root folder for relative paths (optional)")
+    parser.add_argument("--input-folder", type=str, help="path to image directory (absolute or relative to --root-folder)")
     parser.add_argument("--calib", type=str, help="path to calibration file")
     parser.add_argument("--t0", default=0, type=int, help="starting frame")
     parser.add_argument("--stride", default=1, type=int, help="frame stride")
@@ -175,13 +188,20 @@ if __name__ == '__main__':
     
     parser.add_argument("--camera-model", type=str, default="radtan", choices=["radtan", "fisheye"], help="Camera model: radtan or fisheye")
     parser.add_argument("--filename-is-timestamp", action="store_true", help="treat image filename stem as a nanosecond UNIX timestamp")
-    parser.add_argument("--output-dir", type=str, default=None, help="folder to save reconstruction (.pt) and point cloud (.ply)")
+    parser.add_argument("--output-folder", type=str, default=None, help="folder to save reconstruction (.pt) and point cloud (.ply) (absolute or relative to --root-folder)")
 
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
         sys.exit(0)
 
     args = parser.parse_args()
+
+    # Resolve root folder relative paths
+    if args.root_folder:
+        if not os.path.isabs(args.input_folder):
+            args.input_folder = os.path.join(args.root_folder, args.input_folder)
+        if args.output_folder and not os.path.isabs(args.output_folder):
+            args.output_folder = os.path.join(args.root_folder, args.output_folder)
 
     args.stereo = False
     try:
@@ -196,23 +216,23 @@ if __name__ == '__main__':
     droid = None
 
     # need high resolution depths for PLY export
-    if args.output_dir is not None:
+    if args.output_folder is not None:
         args.upsample = True
 
     # Count total images for progress bar
     import glob as glob_module
-    all_image_files = sorted(os.listdir(args.input_dir))[::args.stride]
+    all_image_files = list_image_files(args.input_folder)[::args.stride]
     total_images = len(all_image_files)
 
-    print(f"\n📸 Input:  {args.input_dir}  ({total_images} images, stride={args.stride})")
-    print(f"📁 Output: {args.output_dir}")
+    print(f"\n📸 Input:  {args.input_folder}  ({total_images} images, stride={args.stride})")
+    print(f"📁 Output: {args.output_folder}")
     print(f"🎛️  Buffer: {args.buffer} keyframes | filter_thresh={args.filter_thresh} | keyframe_thresh={args.keyframe_thresh}")
     print(f"⚙️  Mode:   {'async' if args.asynchronous else 'sync'} | upsample={args.upsample}")
     print()
 
     all_tstamps = []
     frame_count = 0
-    for (t, image, intrinsics) in tqdm(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
+    for (t, image, intrinsics) in tqdm(image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
                                          desc="DROID-SLAM tracking",
                                          total=total_images,
                                          unit="frame",
@@ -234,16 +254,16 @@ if __name__ == '__main__':
 
     print(f"🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
 
-    traj_est = droid.terminate(image_stream(args.input_dir, args.calib, args.stride, args.camera_model, args.filename_is_timestamp))
+    traj_est = droid.terminate(image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp))
     
-    if args.output_dir is not None:
-        os.makedirs(args.output_dir, exist_ok=True)
-        config_path = os.path.join(args.output_dir, "config.yaml")
+    if args.output_folder is not None:
+        os.makedirs(args.output_folder, exist_ok=True)
+        config_path = os.path.join(args.output_folder, "config.yaml")
         with open(config_path, "w") as f:
-            yaml.dump(vars(args), f, default_flow_style=False)
+            yaml.dump(vars(args), f, default_flow_style=False, sort_keys=False, allow_unicode=True)
         print(f"📝 Config saved to {config_path}")
-        print(f"Saving {frame_count} frames to {args.output_dir}")
-        save_reconstruction(droid, os.path.join(args.output_dir, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
-        export_poses_csv(os.path.join(args.output_dir, "poses.csv"), traj_est, all_tstamps)
-        export_ply(droid, os.path.join(args.output_dir, "reconstruction.ply"))
-        print(f"🎉 Done! Results saved to {args.output_dir}")
+        print(f"Saving {frame_count} frames to {args.output_folder}")
+        save_reconstruction(droid, os.path.join(args.output_folder, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
+        export_poses_csv(os.path.join(args.output_folder, "poses.csv"), traj_est, all_tstamps)
+        export_ply(droid, os.path.join(args.output_folder, "reconstruction.ply"))
+        print(f"🎉 Done! Results saved to {args.output_folder}")
