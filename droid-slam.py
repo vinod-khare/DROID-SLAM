@@ -121,7 +121,8 @@ def export_poses_csv(output_path, poses_all, tstamps_all):
             pose_mat = pose_mats[i]
             position = pose_mat[:3, 3]
             quaternion = Rotation.from_matrix(pose_mat[:3, :3]).as_quat()
-            writer.writerow([timestamps[i], *position.tolist(), *quaternion.tolist()])
+            timestamp_str = f"{float(timestamps[i]):.9f}"
+            writer.writerow([timestamp_str, *position.tolist(), *quaternion.tolist()])
 
 
 def export_ply(droid, output_path, filter_thresh=0.005, filter_count=2):
