@@ -11,11 +11,8 @@ import argparse
 import yaml
 import copy
 
-from torch.multiprocessing import Process
 from droid import Droid
 from droid_async import DroidAsync
-
-import torch.nn.functional as F
 
 import droid_backends
 import open3d as o3d
@@ -356,29 +353,20 @@ def export_ply_from_reconstruction_file(input_file, output_ply, filter_thresh=0.
     o3d.io.write_point_cloud(output_ply, pcd)
 
 
-if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] == "convert":
-        convert_parser = argparse.ArgumentParser(
-            prog="droid-slam.py convert",
-            description="Convert reconstruction .pt file to .ply point cloud",
-        )
-        convert_parser.add_argument("--input-file", type=str, required=True, help="path to reconstruction .pt file")
-        convert_parser.add_argument("--output-ply", type=str, required=True, help="path to output .ply file")
-        convert_parser.add_argument("--filter-threshold", type=float, default=0.005, help="consistency threshold used for point filtering (higher → denser)")
-        convert_parser.add_argument("--filter-count", type=int, default=1, help="minimum number of supporting views per point (lower → denser)")
-        convert_parser.add_argument("--min-disp-ratio", type=float, default=0.1, help="minimum disparity as fraction of mean (lower → denser, 0.0 to disable)")
-        convert_args = convert_parser.parse_args(sys.argv[2:])
+def _build_convert_parser():
+    parser = argparse.ArgumentParser(
+        prog="droid-slam.py convert",
+        description="Convert reconstruction .pt file to .ply point cloud",
+    )
+    parser.add_argument("--input-file", type=str, required=True, help="path to reconstruction .pt file")
+    parser.add_argument("--output-ply", type=str, required=True, help="path to output .ply file")
+    parser.add_argument("--filter-threshold", type=float, default=0.005, help="consistency threshold used for point filtering (higher -> denser)")
+    parser.add_argument("--filter-count", type=int, default=1, help="minimum number of supporting views per point (lower -> denser)")
+    parser.add_argument("--min-disp-ratio", type=float, default=0.1, help="minimum disparity as fraction of mean (lower -> denser, 0.0 to disable)")
+    return parser
 
-        export_ply_from_reconstruction_file(
-            convert_args.input_file,
-            convert_args.output_ply,
-            filter_thresh=convert_args.filter_threshold,
-            filter_count=convert_args.filter_count,
-            min_disp_ratio=convert_args.min_disp_ratio,
-        )
-        print("🎉 Convert complete")
-        sys.exit(0)
 
+def _build_main_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root-folder", type=str, default=None, help="root folder for relative paths (optional)")
     parser.add_argument("--input-folder", type=str, help="path to image directory (absolute or relative to --root-folder)")
@@ -407,42 +395,73 @@ if __name__ == '__main__':
     parser.add_argument("--asynchronous", action="store_true")
     parser.add_argument("--frontend_device", type=str, default="cuda")
     parser.add_argument("--backend_device", type=str, default="cuda")
-    
+
     parser.add_argument("--camera-model", type=str, default="radtan", choices=["radtan", "fisheye"], help="Camera model: radtan or fisheye")
     parser.add_argument("--filename-is-timestamp", action=argparse.BooleanOptionalAction, default=True, help="treat image filename stem as a nanosecond UNIX timestamp (default: enabled; use --no-filename-is-timestamp to disable)")
     parser.add_argument("--output-folder", type=str, default=None, help="folder to save reconstruction (.pt) and point cloud (.ply) (absolute or relative to --root-folder)")
     parser.add_argument("--runs-config", type=str, default=None, help="YAML file defining multiple dataset runs")
     parser.add_argument("--continue-on-error", action="store_true", help="in batch mode, continue running other datasets after an error")
+    return parser
 
-    if len(sys.argv) == 1:
+
+def _run_convert_mode(argv):
+    convert_parser = _build_convert_parser()
+    convert_args = convert_parser.parse_args(argv)
+
+    export_ply_from_reconstruction_file(
+        convert_args.input_file,
+        convert_args.output_ply,
+        filter_thresh=convert_args.filter_threshold,
+        filter_count=convert_args.filter_count,
+        min_disp_ratio=convert_args.min_disp_ratio,
+    )
+    print("🎉 Convert complete")
+
+
+def _run_batch_mode(args):
+    defaults, runs = _load_runs_config(args.runs_config)
+    print(f"📚 Loaded batch config: {args.runs_config} ({len(runs)} runs)")
+
+    failures = 0
+    for idx, run in enumerate(runs, start=1):
+        run_name = run.get("name", f"run_{idx:02d}")
+        run_args_dict = copy.deepcopy(vars(args))
+        run_args_dict.update(defaults)
+        run_args_dict.update(run)
+        run_args = argparse.Namespace(**run_args_dict)
+
+        try:
+            _run_tracking(run_args, run_name=run_name)
+        except Exception as exc:
+            failures += 1
+            print(f"❌ Run failed: {run_name} ({exc})")
+            if not args.continue_on_error:
+                raise
+
+    succeeded = len(runs) - failures
+    print(f"\n📊 Batch summary: {succeeded}/{len(runs)} succeeded, {failures} failed")
+    if failures > 0:
+        sys.exit(1)
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+
+    if len(argv) > 0 and argv[0] == "convert":
+        _run_convert_mode(argv[1:])
+        return
+
+    parser = _build_main_parser()
+    if len(argv) == 0:
         parser.print_help(sys.stderr)
-        sys.exit(0)
+        return
 
-    args = parser.parse_args()
-
+    args = parser.parse_args(argv)
     if args.runs_config:
-        defaults, runs = _load_runs_config(args.runs_config)
-        print(f"📚 Loaded batch config: {args.runs_config} ({len(runs)} runs)")
-
-        failures = 0
-        for idx, run in enumerate(runs, start=1):
-            run_name = run.get("name", f"run_{idx:02d}")
-            run_args_dict = copy.deepcopy(vars(args))
-            run_args_dict.update(defaults)
-            run_args_dict.update(run)
-            run_args = argparse.Namespace(**run_args_dict)
-
-            try:
-                _run_tracking(run_args, run_name=run_name)
-            except Exception as exc:
-                failures += 1
-                print(f"❌ Run failed: {run_name} ({exc})")
-                if not args.continue_on_error:
-                    raise
-
-        succeeded = len(runs) - failures
-        print(f"\n📊 Batch summary: {succeeded}/{len(runs)} succeeded, {failures} failed")
-        if failures > 0:
-            sys.exit(1)
+        _run_batch_mode(args)
     else:
         _run_tracking(args)
+
+
+if __name__ == '__main__':
+    main()
