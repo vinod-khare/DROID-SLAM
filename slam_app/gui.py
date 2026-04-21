@@ -9,7 +9,11 @@ from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSplitter,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -97,6 +102,10 @@ class MainWindow(QMainWindow):
         self.config_path = config_path
         self.config_data = {"defaults": {}, "runs": []}
         self.status_by_index = {}
+        self.run_checked = {}
+        self._updating_run_list = False
+        self._updating_form = False
+        self._updating_yaml = False
         self.worker_thread = None
 
         central = QWidget(self)
@@ -138,6 +147,57 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(QLabel("Runs (check to execute):"))
         self.run_list = QListWidget()
         left_layout.addWidget(self.run_list, 1)
+
+        details_box = QGroupBox("Run details")
+        details_form = QFormLayout(details_box)
+
+        self.field_name = QLineEdit()
+        self.field_root = QLineEdit()
+        self.field_input = QLineEdit()
+        self.field_output = QLineEdit()
+        self.field_calib = QLineEdit()
+        self.field_camera = QComboBox()
+        self.field_camera.addItems(["radtan", "fisheye"])
+        self.field_skip = QCheckBox("Skip this run")
+
+        self.field_stride = QSpinBox()
+        self.field_stride.setRange(1, 100000)
+        self.field_t0 = QSpinBox()
+        self.field_t0.setRange(0, 100000000)
+        self.field_buffer = QSpinBox()
+        self.field_buffer.setRange(1, 100000)
+
+        self.field_filter_thresh = QDoubleSpinBox()
+        self.field_filter_thresh.setRange(0.0, 1_000_000.0)
+        self.field_filter_thresh.setDecimals(4)
+        self.field_keyframe_thresh = QDoubleSpinBox()
+        self.field_keyframe_thresh.setRange(0.0, 1_000_000.0)
+        self.field_keyframe_thresh.setDecimals(4)
+
+        self.field_target_width = QLineEdit()
+        self.field_target_width.setPlaceholderText("empty = use native width")
+        self.field_target_height = QLineEdit()
+        self.field_target_height.setPlaceholderText("empty = use native height")
+
+        details_form.addRow("name", self.field_name)
+        details_form.addRow("root_folder", self.field_root)
+        details_form.addRow("input_folder", self.field_input)
+        details_form.addRow("output_folder", self.field_output)
+        details_form.addRow("calib", self.field_calib)
+        details_form.addRow("camera_model", self.field_camera)
+        details_form.addRow("", self.field_skip)
+        details_form.addRow("stride", self.field_stride)
+        details_form.addRow("t0", self.field_t0)
+        details_form.addRow("buffer", self.field_buffer)
+        details_form.addRow("filter_thresh", self.field_filter_thresh)
+        details_form.addRow("keyframe_thresh", self.field_keyframe_thresh)
+        details_form.addRow("target_width", self.field_target_width)
+        details_form.addRow("target_height", self.field_target_height)
+
+        self.btn_apply_form = QPushButton("Apply form to selected run")
+        details_form.addRow("", self.btn_apply_form)
+        left_layout.addWidget(details_box)
+
         splitter.addWidget(left)
 
         right = QWidget()
@@ -160,11 +220,46 @@ class MainWindow(QMainWindow):
         self.btn_add_run.clicked.connect(self.on_add_run)
         self.btn_remove_run.clicked.connect(self.on_remove_run)
         self.btn_run.clicked.connect(self.on_run_selected)
+        self.btn_apply_form.clicked.connect(self.on_apply_form_to_run)
+        self.run_list.currentRowChanged.connect(self.on_run_selection_changed)
+        self.run_list.itemChanged.connect(self.on_run_item_changed)
+        self.yaml_edit.textChanged.connect(self.on_yaml_text_changed)
+
+        self.field_name.editingFinished.connect(self.on_form_edited)
+        self.field_root.editingFinished.connect(self.on_form_edited)
+        self.field_input.editingFinished.connect(self.on_form_edited)
+        self.field_output.editingFinished.connect(self.on_form_edited)
+        self.field_calib.editingFinished.connect(self.on_form_edited)
+        self.field_camera.currentTextChanged.connect(self.on_form_edited)
+        self.field_skip.stateChanged.connect(self.on_form_edited)
+        self.field_stride.valueChanged.connect(self.on_form_edited)
+        self.field_t0.valueChanged.connect(self.on_form_edited)
+        self.field_buffer.valueChanged.connect(self.on_form_edited)
+        self.field_filter_thresh.valueChanged.connect(self.on_form_edited)
+        self.field_keyframe_thresh.valueChanged.connect(self.on_form_edited)
+        self.field_target_width.editingFinished.connect(self.on_form_edited)
+        self.field_target_height.editingFinished.connect(self.on_form_edited)
 
         self.on_load()
 
     def _append_log(self, message):
         self.log_edit.appendPlainText(message)
+
+    def _set_editor_from_config(self):
+        self._updating_yaml = True
+        try:
+            self.yaml_edit.setPlainText(
+                yaml.dump(self.config_data, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            )
+        finally:
+            self._updating_yaml = False
+
+    def _selected_run_index(self):
+        row = self.run_list.currentRow()
+        runs = self.config_data.get("runs", [])
+        if row < 0 or row >= len(runs):
+            return None
+        return row
 
     def _run_title(self, idx, run):
         name = run.get("name", f"run_{idx + 1:02d}")
@@ -172,13 +267,76 @@ class MainWindow(QMainWindow):
         return f"{self.STATUS_PREFIX[status]}{name}"
 
     def _refresh_run_list(self):
+        current_row = self.run_list.currentRow()
+        self._updating_run_list = True
         self.run_list.clear()
         runs = self.config_data.get("runs", [])
         for idx, run in enumerate(runs):
             item = QListWidgetItem(self._run_title(idx, run))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked if bool(run.get("skip", False)) else Qt.Checked)
+            default_checked = not bool(run.get("skip", False))
+            is_checked = self.run_checked.get(idx, default_checked)
+            item.setCheckState(Qt.Checked if is_checked else Qt.Unchecked)
             self.run_list.addItem(item)
+        self._updating_run_list = False
+
+        if runs:
+            if current_row < 0 or current_row >= len(runs):
+                current_row = 0
+            self.run_list.setCurrentRow(current_row)
+            self._load_run_to_form(current_row)
+        else:
+            self._load_run_to_form(None)
+
+    def _load_run_to_form(self, idx):
+        self._updating_form = True
+        try:
+            if idx is None:
+                self.field_name.setText("")
+                self.field_root.setText("")
+                self.field_input.setText("")
+                self.field_output.setText("")
+                self.field_calib.setText("")
+                self.field_camera.setCurrentText("radtan")
+                self.field_skip.setChecked(False)
+                self.field_stride.setValue(1)
+                self.field_t0.setValue(0)
+                self.field_buffer.setValue(512)
+                self.field_filter_thresh.setValue(2.4)
+                self.field_keyframe_thresh.setValue(2.0)
+                self.field_target_width.setText("")
+                self.field_target_height.setText("")
+                return
+
+            run = self.config_data["runs"][idx]
+            self.field_name.setText(str(run.get("name", f"run_{idx + 1:02d}")))
+            self.field_root.setText(str(run.get("root_folder", "")))
+            self.field_input.setText(str(run.get("input_folder", "")))
+            self.field_output.setText(str(run.get("output_folder", "")))
+            self.field_calib.setText(str(run.get("calib", "")))
+            self.field_camera.setCurrentText(str(run.get("camera_model", "radtan")))
+            self.field_skip.setChecked(bool(run.get("skip", False)))
+            self.field_stride.setValue(int(run.get("stride", self.config_data.get("defaults", {}).get("stride", 1))))
+            self.field_t0.setValue(int(run.get("t0", self.config_data.get("defaults", {}).get("t0", 0))))
+            self.field_buffer.setValue(int(run.get("buffer", self.config_data.get("defaults", {}).get("buffer", 512))))
+            self.field_filter_thresh.setValue(float(run.get("filter_thresh", self.config_data.get("defaults", {}).get("filter_thresh", 2.4))))
+            self.field_keyframe_thresh.setValue(float(run.get("keyframe_thresh", self.config_data.get("defaults", {}).get("keyframe_thresh", 2.0))))
+            self.field_target_width.setText("" if run.get("target_width", None) is None else str(run.get("target_width")))
+            self.field_target_height.setText("" if run.get("target_height", None) is None else str(run.get("target_height")))
+        finally:
+            self._updating_form = False
+
+    def _parse_optional_int(self, value_text, field_name):
+        text = value_text.strip()
+        if text == "":
+            return None
+        try:
+            value = int(text)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must be an integer or empty") from exc
+        if value <= 0:
+            raise ValueError(f"{field_name} must be positive")
+        return value
 
     def _parse_editor(self):
         text = self.yaml_edit.toPlainText()
@@ -202,7 +360,8 @@ class MainWindow(QMainWindow):
             self.config_data.setdefault("defaults", {})
             self.config_data.setdefault("runs", [])
             self.status_by_index = {i: "idle" for i in range(len(self.config_data["runs"]))}
-            self.yaml_edit.setPlainText(yaml.dump(self.config_data, default_flow_style=False, sort_keys=False, allow_unicode=True))
+            self.run_checked = {i: (not bool(run.get("skip", False))) for i, run in enumerate(self.config_data["runs"])}
+            self._set_editor_from_config()
             self._refresh_run_list()
             self._append_log(f"📚 Loaded: {self.config_path}")
         except Exception as exc:
@@ -215,6 +374,7 @@ class MainWindow(QMainWindow):
             save_runs_config(self.config_path, config)
             self.config_data = config
             self.status_by_index = {i: self.status_by_index.get(i, "idle") for i in range(len(self.config_data["runs"]))}
+            self.run_checked = {i: self.run_checked.get(i, not bool(run.get("skip", False))) for i, run in enumerate(self.config_data["runs"])}
             self._refresh_run_list()
             self._append_log(f"💾 Saved: {self.config_path}")
         except Exception as exc:
@@ -225,6 +385,7 @@ class MainWindow(QMainWindow):
             config, _, _ = self._parse_editor()
             self.config_data = config
             self.status_by_index = {i: self.status_by_index.get(i, "idle") for i in range(len(self.config_data["runs"]))}
+            self.run_checked = {i: self.run_checked.get(i, not bool(run.get("skip", False))) for i, run in enumerate(self.config_data["runs"])}
             self._refresh_run_list()
             QMessageBox.information(self, "Valid", "YAML config is valid.")
         except Exception as exc:
@@ -245,9 +406,10 @@ class MainWindow(QMainWindow):
                 }
             )
             config["runs"] = runs
-            self.yaml_edit.setPlainText(yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True))
             self.config_data = config
+            self._set_editor_from_config()
             self.status_by_index = {i: self.status_by_index.get(i, "idle") for i in range(len(runs))}
+            self.run_checked = {i: self.run_checked.get(i, not bool(run.get("skip", False))) for i, run in enumerate(runs)}
             self._refresh_run_list()
         except Exception as exc:
             QMessageBox.critical(self, "Add run failed", str(exc))
@@ -264,13 +426,120 @@ class MainWindow(QMainWindow):
             removed_name = runs[row].get("name", f"run_{row + 1:02d}")
             runs.pop(row)
             config["runs"] = runs
-            self.yaml_edit.setPlainText(yaml.dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True))
             self.config_data = config
+            self._set_editor_from_config()
             self.status_by_index = {i: "idle" for i in range(len(runs))}
+            self.run_checked = {i: (not bool(run.get("skip", False))) for i, run in enumerate(runs)}
             self._refresh_run_list()
             self._append_log(f"🗑️  Removed run: {removed_name}")
         except Exception as exc:
             QMessageBox.critical(self, "Remove run failed", str(exc))
+
+    def on_run_selection_changed(self, row):
+        if row < 0:
+            self._load_run_to_form(None)
+        else:
+            self._load_run_to_form(row)
+
+    def on_run_item_changed(self, item):
+        if self._updating_run_list:
+            return
+        idx = self.run_list.row(item)
+        if idx < 0:
+            return
+        is_checked = item.checkState() == Qt.Checked
+        self.run_checked[idx] = is_checked
+
+        runs = self.config_data.get("runs", [])
+        if idx < len(runs):
+            # List checkbox means "run enabled"; skip is the inverse.
+            runs[idx]["skip"] = not is_checked
+            self._set_editor_from_config()
+            self._refresh_run_list()
+            self.run_list.setCurrentRow(idx)
+
+    def _apply_form_to_selected_run(self, log_update=True):
+        if self._updating_form:
+            return
+        idx = self._selected_run_index()
+        if idx is None:
+            return
+
+        run = self.config_data["runs"][idx]
+        run["name"] = self.field_name.text().strip() or f"run_{idx + 1:02d}"
+        run["root_folder"] = self.field_root.text().strip()
+        run["input_folder"] = self.field_input.text().strip()
+        run["output_folder"] = self.field_output.text().strip()
+        run["calib"] = self.field_calib.text().strip()
+        run["camera_model"] = self.field_camera.currentText()
+        run["skip"] = self.field_skip.isChecked()
+        run["stride"] = int(self.field_stride.value())
+        run["t0"] = int(self.field_t0.value())
+        run["buffer"] = int(self.field_buffer.value())
+        run["filter_thresh"] = float(self.field_filter_thresh.value())
+        run["keyframe_thresh"] = float(self.field_keyframe_thresh.value())
+
+        target_width = self._parse_optional_int(self.field_target_width.text(), "target_width")
+        target_height = self._parse_optional_int(self.field_target_height.text(), "target_height")
+        if (target_width is None) != (target_height is None):
+            raise ValueError("target_width and target_height must both be set or both be empty")
+        if target_width is None:
+            run.pop("target_width", None)
+            run.pop("target_height", None)
+        else:
+            run["target_width"] = target_width
+            run["target_height"] = target_height
+
+        self.run_checked[idx] = not run["skip"]
+        self._set_editor_from_config()
+        self._refresh_run_list()
+        self.run_list.setCurrentRow(idx)
+        if log_update:
+            self._append_log(f"🛠️  Updated run: {run['name']}")
+
+    def on_form_edited(self):
+        if self._updating_form:
+            return
+        try:
+            self._apply_form_to_selected_run(log_update=False)
+        except Exception:
+            # Keep UI responsive while typing partial values; explicit Apply will report details.
+            pass
+
+    def on_yaml_text_changed(self):
+        if self._updating_yaml:
+            return
+        try:
+            config, _, _ = self._parse_editor()
+        except Exception:
+            # Ignore transient invalid YAML while user is typing.
+            return
+
+        current_row = self.run_list.currentRow()
+        self.config_data = config
+        self.status_by_index = {
+            i: self.status_by_index.get(i, "idle") for i in range(len(self.config_data.get("runs", [])))
+        }
+        self.run_checked = {
+            i: self.run_checked.get(i, not bool(run.get("skip", False)))
+            for i, run in enumerate(self.config_data.get("runs", []))
+        }
+        self._refresh_run_list()
+        if 0 <= current_row < self.run_list.count():
+            self.run_list.setCurrentRow(current_row)
+
+    def on_apply_form_to_run(self):
+        if self._updating_form:
+            return
+        idx = self._selected_run_index()
+        if idx is None:
+            QMessageBox.information(self, "No run selected", "Select a run first.")
+            return
+
+        try:
+            self._apply_form_to_selected_run(log_update=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Apply failed", str(exc))
 
     def _set_running_controls(self, running):
         self.btn_run.setEnabled(not running)
