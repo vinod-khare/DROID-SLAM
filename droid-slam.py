@@ -157,8 +157,14 @@ def export_ply(droid, output_path, filter_thresh=0.005, filter_count=2):
     o3d.io.write_point_cloud(output_path, pcd)
 
 
-def export_ply_from_reconstruction_file(input_file, output_ply, filter_thresh=0.005, filter_count=2):
-    """Convert a saved reconstruction .pt file into a filtered .ply point cloud."""
+def export_ply_from_reconstruction_file(input_file, output_ply, filter_thresh=0.005, filter_count=1, min_disp_ratio=0.1):
+    """Convert a saved reconstruction .pt file into a filtered .ply point cloud.
+    
+    Args:
+        filter_thresh: Disparity consistency threshold (lower → sparser, higher → denser)
+        filter_count: Minimum number of supporting views per point (lower → denser)
+        min_disp_ratio: Minimum disparity as fraction of mean (lower → denser, 0.0 to skip)
+    """
     print(f"📦 Loading reconstruction from {input_file}")
     reconstruction_blob = torch.load(input_file, weights_only=False)
 
@@ -180,7 +186,10 @@ def export_ply_from_reconstruction_file(input_file, output_ply, filter_thresh=0.
     colors = images[:, [2, 1, 0]].permute(0, 2, 3, 1) / 255.0
     counts = droid_backends.depth_filter(poses, disps, intrinsics[0], index, thresh)
 
-    mask = (counts >= filter_count) & (disps > 0.25 * disps.mean())
+    mask = (counts >= filter_count)
+    if min_disp_ratio > 0:
+        mask = mask & (disps > min_disp_ratio * disps.mean())
+    
     points_np = points[mask].cpu().numpy()
     colors_np = colors[mask].cpu().numpy()
 
@@ -205,8 +214,9 @@ if __name__ == '__main__':
         )
         convert_parser.add_argument("--input-file", type=str, required=True, help="path to reconstruction .pt file")
         convert_parser.add_argument("--output-ply", type=str, required=True, help="path to output .ply file")
-        convert_parser.add_argument("--filter-threshold", type=float, default=0.005, help="consistency threshold used for point filtering")
-        convert_parser.add_argument("--filter-count", type=int, default=2, help="minimum number of supporting views per point")
+        convert_parser.add_argument("--filter-threshold", type=float, default=0.005, help="consistency threshold used for point filtering (higher → denser)")
+        convert_parser.add_argument("--filter-count", type=int, default=1, help="minimum number of supporting views per point (lower → denser)")
+        convert_parser.add_argument("--min-disp-ratio", type=float, default=0.1, help="minimum disparity as fraction of mean (lower → denser, 0.0 to disable)")
         convert_args = convert_parser.parse_args(sys.argv[2:])
 
         export_ply_from_reconstruction_file(
@@ -214,6 +224,7 @@ if __name__ == '__main__':
             convert_args.output_ply,
             filter_thresh=convert_args.filter_threshold,
             filter_count=convert_args.filter_count,
+            min_disp_ratio=convert_args.min_disp_ratio,
         )
         print("🎉 Convert complete")
         sys.exit(0)
