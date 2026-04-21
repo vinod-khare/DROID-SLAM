@@ -39,7 +39,7 @@ def show_image(image):
     cv2.imshow('image', image / 255.0)
     cv2.waitKey(1)
 
-def image_stream(imagedir, calib, stride, camera_model, filename_is_timestamp=False):
+def image_stream(imagedir, calib, stride, camera_model, filename_is_timestamp=True):
     """ image generator """
 
     calib = np.loadtxt(calib, delimiter=" ")
@@ -157,7 +157,67 @@ def export_ply(droid, output_path, filter_thresh=0.005, filter_count=2):
     o3d.io.write_point_cloud(output_path, pcd)
 
 
+def export_ply_from_reconstruction_file(input_file, output_ply, filter_thresh=0.005, filter_count=2):
+    """Convert a saved reconstruction .pt file into a filtered .ply point cloud."""
+    print(f"📦 Loading reconstruction from {input_file}")
+    reconstruction_blob = torch.load(input_file, weights_only=False)
+
+    required_keys = ["images", "disps", "poses", "intrinsics"]
+    missing = [k for k in required_keys if k not in reconstruction_blob]
+    if missing:
+        raise KeyError(f"Missing keys in reconstruction file: {missing}")
+
+    images = reconstruction_blob["images"].cuda()[..., ::2, ::2]
+    disps = reconstruction_blob["disps"].cuda()[..., ::2, ::2].contiguous()
+    poses = reconstruction_blob["poses"].cuda()
+    intrinsics = 4 * reconstruction_blob["intrinsics"].cuda()
+
+    t = images.shape[0]
+    index = torch.arange(t, device="cuda")
+    thresh = filter_thresh * torch.ones_like(disps.mean(dim=[1, 2]))
+
+    points = droid_backends.iproj(SE3(poses).inv().data, disps, intrinsics[0])
+    colors = images[:, [2, 1, 0]].permute(0, 2, 3, 1) / 255.0
+    counts = droid_backends.depth_filter(poses, disps, intrinsics[0], index, thresh)
+
+    mask = (counts >= filter_count) & (disps > 0.25 * disps.mean())
+    points_np = points[mask].cpu().numpy()
+    colors_np = colors[mask].cpu().numpy()
+
+    print(f"📦 Creating point cloud with {len(points_np)} points")
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points_np)
+    pcd.colors = o3d.utility.Vector3dVector(colors_np)
+
+    out_dir = os.path.dirname(output_ply)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    print(f"💾 Saving point cloud to {output_ply}")
+    o3d.io.write_point_cloud(output_ply, pcd)
+
+
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == "convert":
+        convert_parser = argparse.ArgumentParser(
+            prog="droid-slam.py convert",
+            description="Convert reconstruction .pt file to .ply point cloud",
+        )
+        convert_parser.add_argument("--input-file", type=str, required=True, help="path to reconstruction .pt file")
+        convert_parser.add_argument("--output-ply", type=str, required=True, help="path to output .ply file")
+        convert_parser.add_argument("--filter-threshold", type=float, default=0.005, help="consistency threshold used for point filtering")
+        convert_parser.add_argument("--filter-count", type=int, default=2, help="minimum number of supporting views per point")
+        convert_args = convert_parser.parse_args(sys.argv[2:])
+
+        export_ply_from_reconstruction_file(
+            convert_args.input_file,
+            convert_args.output_ply,
+            filter_thresh=convert_args.filter_threshold,
+            filter_count=convert_args.filter_count,
+        )
+        print("🎉 Convert complete")
+        sys.exit(0)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--root-folder", type=str, default=None, help="root folder for relative paths (optional)")
     parser.add_argument("--input-folder", type=str, help="path to image directory (absolute or relative to --root-folder)")
@@ -188,7 +248,7 @@ if __name__ == '__main__':
     parser.add_argument("--backend_device", type=str, default="cuda")
     
     parser.add_argument("--camera-model", type=str, default="radtan", choices=["radtan", "fisheye"], help="Camera model: radtan or fisheye")
-    parser.add_argument("--filename-is-timestamp", action="store_true", help="treat image filename stem as a nanosecond UNIX timestamp")
+    parser.add_argument("--filename-is-timestamp", action=argparse.BooleanOptionalAction, default=True, help="treat image filename stem as a nanosecond UNIX timestamp (default: enabled; use --no-filename-is-timestamp to disable)")
     parser.add_argument("--output-folder", type=str, default=None, help="folder to save reconstruction (.pt) and point cloud (.ply) (absolute or relative to --root-folder)")
 
     if len(sys.argv) == 1:

@@ -143,7 +143,7 @@ class ControlWindow:
         self.root.after(3000, lambda: self.status_label.config(text=""))
 
 def view_reconstruction(filename: str, filter_thresh = 0.005, filter_count=2, bg_color=None):
-    reconstruction_blob = torch.load(filename)
+    reconstruction_blob = torch.load(filename, weights_only=False)
     images = reconstruction_blob["images"].cuda()[...,::2,::2]
     disps = reconstruction_blob["disps"].cuda()[...,::2,::2]
     poses = reconstruction_blob["poses"].cuda()
