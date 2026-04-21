@@ -9,6 +9,7 @@ import os
 import csv
 import argparse
 import yaml
+import copy
 
 from torch.multiprocessing import Process
 from droid import Droid
@@ -24,6 +25,37 @@ from scipy.spatial.transform import Rotation
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
+RUN_CONFIG_ALLOWED_KEYS = {
+    "name",
+    "root_folder",
+    "input_folder",
+    "output_folder",
+    "calib",
+    "t0",
+    "stride",
+    "weights",
+    "buffer",
+    "image_size",
+    "disable_vis",
+    "beta",
+    "filter_thresh",
+    "warmup",
+    "keyframe_thresh",
+    "frontend_thresh",
+    "frontend_window",
+    "frontend_radius",
+    "frontend_nms",
+    "backend_thresh",
+    "backend_radius",
+    "backend_nms",
+    "upsample",
+    "asynchronous",
+    "frontend_device",
+    "backend_device",
+    "camera_model",
+    "filename_is_timestamp",
+}
+
 
 def list_image_files(folder):
     return sorted(
@@ -32,6 +64,124 @@ def list_image_files(folder):
         if os.path.isfile(os.path.join(folder, f))
         and os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
     )
+
+
+def _resolve_run_paths(args):
+    if args.root_folder:
+        if args.input_folder and not os.path.isabs(args.input_folder):
+            args.input_folder = os.path.join(args.root_folder, args.input_folder)
+        if args.output_folder and not os.path.isabs(args.output_folder):
+            args.output_folder = os.path.join(args.root_folder, args.output_folder)
+        if args.calib and not os.path.isabs(args.calib):
+            args.calib = os.path.join(args.root_folder, args.calib)
+
+
+def _load_runs_config(config_path):
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+
+    if not isinstance(config, dict):
+        raise ValueError("runs config must be a YAML mapping")
+
+    defaults = config.get("defaults", {}) or {}
+    runs = config.get("runs", None)
+
+    if not isinstance(defaults, dict):
+        raise ValueError("runs config field 'defaults' must be a mapping")
+    if not isinstance(runs, list) or len(runs) == 0:
+        raise ValueError("runs config must contain a non-empty 'runs' list")
+
+    unknown_default_keys = set(defaults.keys()) - RUN_CONFIG_ALLOWED_KEYS
+    if unknown_default_keys:
+        raise ValueError(f"unknown keys in defaults: {sorted(unknown_default_keys)}")
+
+    for idx, run in enumerate(runs):
+        if not isinstance(run, dict):
+            raise ValueError(f"run #{idx + 1} must be a mapping")
+        unknown_run_keys = set(run.keys()) - RUN_CONFIG_ALLOWED_KEYS
+        if unknown_run_keys:
+            raise ValueError(f"unknown keys in run #{idx + 1}: {sorted(unknown_run_keys)}")
+
+    return defaults, runs
+
+
+def _run_tracking(args, run_name=None):
+    if not args.input_folder:
+        raise ValueError("missing required input folder (--input-folder)")
+    if not args.calib:
+        raise ValueError("missing required calibration file (--calib)")
+
+    _resolve_run_paths(args)
+
+    args.stereo = False
+    try:
+        torch.multiprocessing.set_start_method('fork')
+    except RuntimeError:
+        pass  # method already set
+
+    # Disable visualization in async mode to avoid CUDA initialization errors in child processes on WSL2
+    if args.asynchronous:
+        args.disable_vis = True
+
+    droid = None
+
+    # need high resolution depths for PLY export
+    if args.output_folder is not None:
+        args.upsample = True
+
+    all_image_files = list_image_files(args.input_folder)[::args.stride]
+    total_images = len(all_image_files)
+
+    if run_name:
+        print(f"\n===== Run: {run_name} =====")
+    print(f"\n📸 Input:  {args.input_folder}  ({total_images} images, stride={args.stride})")
+    print(f"📁 Output: {args.output_folder}")
+    print(f"🎛️  Buffer: {args.buffer} keyframes | filter_thresh={args.filter_thresh} | keyframe_thresh={args.keyframe_thresh}")
+    print(f"⚙️  Mode:   {'async' if args.asynchronous else 'sync'} | upsample={args.upsample}")
+    print()
+
+    all_tstamps = []
+    frame_count = 0
+    for (t, image, intrinsics) in tqdm(
+        image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
+        desc="DROID-SLAM tracking",
+        total=total_images,
+        unit="frame",
+        dynamic_ncols=True,
+    ):
+        if t < args.t0:
+            continue
+
+        all_tstamps.append(t)
+        frame_count += 1
+
+        if not args.disable_vis:
+            show_image(image[0])
+
+        if droid is None:
+            args.image_size = [image.shape[2], image.shape[3]]
+            droid = DroidAsync(args) if args.asynchronous else Droid(args)
+
+        droid.track(t, image, intrinsics=intrinsics)
+
+    print(f"🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
+
+    traj_est = droid.terminate(
+        image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp)
+    )
+
+    if args.output_folder is not None:
+        os.makedirs(args.output_folder, exist_ok=True)
+        config_path = os.path.join(args.output_folder, "config.yaml")
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(vars(args), f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        print(f"📝 Config saved to {config_path}")
+        print(f"Saving {frame_count} frames to {args.output_folder}")
+        save_reconstruction(droid, os.path.join(args.output_folder, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
+        export_poses_csv(os.path.join(args.output_folder, "poses.csv"), traj_est, all_tstamps)
+        export_ply(droid, os.path.join(args.output_folder, "reconstruction.ply"))
+        print(f"🎉 Done! Results saved to {args.output_folder}")
+
 
 
 def show_image(image):
@@ -261,6 +411,8 @@ if __name__ == '__main__':
     parser.add_argument("--camera-model", type=str, default="radtan", choices=["radtan", "fisheye"], help="Camera model: radtan or fisheye")
     parser.add_argument("--filename-is-timestamp", action=argparse.BooleanOptionalAction, default=True, help="treat image filename stem as a nanosecond UNIX timestamp (default: enabled; use --no-filename-is-timestamp to disable)")
     parser.add_argument("--output-folder", type=str, default=None, help="folder to save reconstruction (.pt) and point cloud (.ply) (absolute or relative to --root-folder)")
+    parser.add_argument("--runs-config", type=str, default=None, help="YAML file defining multiple dataset runs")
+    parser.add_argument("--continue-on-error", action="store_true", help="in batch mode, continue running other datasets after an error")
 
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
@@ -268,74 +420,29 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # Resolve root folder relative paths
-    if args.root_folder:
-        if not os.path.isabs(args.input_folder):
-            args.input_folder = os.path.join(args.root_folder, args.input_folder)
-        if args.output_folder and not os.path.isabs(args.output_folder):
-            args.output_folder = os.path.join(args.root_folder, args.output_folder)
+    if args.runs_config:
+        defaults, runs = _load_runs_config(args.runs_config)
+        print(f"📚 Loaded batch config: {args.runs_config} ({len(runs)} runs)")
 
-    args.stereo = False
-    try:
-        torch.multiprocessing.set_start_method('fork')
-    except RuntimeError:
-        pass  # method already set
+        failures = 0
+        for idx, run in enumerate(runs, start=1):
+            run_name = run.get("name", f"run_{idx:02d}")
+            run_args_dict = copy.deepcopy(vars(args))
+            run_args_dict.update(defaults)
+            run_args_dict.update(run)
+            run_args = argparse.Namespace(**run_args_dict)
 
-    # Disable visualization in async mode to avoid CUDA initialization errors in child processes on WSL2
-    if args.asynchronous:
-        args.disable_vis = True
+            try:
+                _run_tracking(run_args, run_name=run_name)
+            except Exception as exc:
+                failures += 1
+                print(f"❌ Run failed: {run_name} ({exc})")
+                if not args.continue_on_error:
+                    raise
 
-    droid = None
-
-    # need high resolution depths for PLY export
-    if args.output_folder is not None:
-        args.upsample = True
-
-    # Count total images for progress bar
-    import glob as glob_module
-    all_image_files = list_image_files(args.input_folder)[::args.stride]
-    total_images = len(all_image_files)
-
-    print(f"\n📸 Input:  {args.input_folder}  ({total_images} images, stride={args.stride})")
-    print(f"📁 Output: {args.output_folder}")
-    print(f"🎛️  Buffer: {args.buffer} keyframes | filter_thresh={args.filter_thresh} | keyframe_thresh={args.keyframe_thresh}")
-    print(f"⚙️  Mode:   {'async' if args.asynchronous else 'sync'} | upsample={args.upsample}")
-    print()
-
-    all_tstamps = []
-    frame_count = 0
-    for (t, image, intrinsics) in tqdm(image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
-                                         desc="DROID-SLAM tracking",
-                                         total=total_images,
-                                         unit="frame",
-                                         dynamic_ncols=True):
-        if t < args.t0:
-            continue
-
-        all_tstamps.append(t)
-        frame_count += 1
-
-        if not args.disable_vis:
-            show_image(image[0])
-
-        if droid is None:
-            args.image_size = [image.shape[2], image.shape[3]]
-            droid = DroidAsync(args) if args.asynchronous else Droid(args)
-        
-        droid.track(t, image, intrinsics=intrinsics)
-
-    print(f"🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
-
-    traj_est = droid.terminate(image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp))
-    
-    if args.output_folder is not None:
-        os.makedirs(args.output_folder, exist_ok=True)
-        config_path = os.path.join(args.output_folder, "config.yaml")
-        with open(config_path, "w") as f:
-            yaml.dump(vars(args), f, default_flow_style=False, sort_keys=False, allow_unicode=True)
-        print(f"📝 Config saved to {config_path}")
-        print(f"Saving {frame_count} frames to {args.output_folder}")
-        save_reconstruction(droid, os.path.join(args.output_folder, "reconstruction.pt"), poses_all=traj_est, tstamps_all=all_tstamps)
-        export_poses_csv(os.path.join(args.output_folder, "poses.csv"), traj_est, all_tstamps)
-        export_ply(droid, os.path.join(args.output_folder, "reconstruction.ply"))
-        print(f"🎉 Done! Results saved to {args.output_folder}")
+        succeeded = len(runs) - failures
+        print(f"\n📊 Batch summary: {succeeded}/{len(runs)} succeeded, {failures} failed")
+        if failures > 0:
+            sys.exit(1)
+    else:
+        _run_tracking(args)

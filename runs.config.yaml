@@ -1,0 +1,50 @@
+# Batch run configuration for droid-slam.py
+#
+# Usage:
+#   python droid-slam.py --runs-config runs.example.yaml
+#   python droid-slam.py --runs-config runs.example.yaml --continue-on-error
+
+defaults:
+  buffer: 2048
+  disable_vis: true
+  filter_thresh: 2.0
+  keyframe_thresh: 1.5
+  stride: 1
+  t0: 0
+  filename_is_timestamp: true
+
+runs:
+  - name: tumvi_corridor1
+    root_folder: .data/tumvi/dataset-corridor1_512_16
+    input_folder: mav0/cam0/data
+    output_folder: droid-slam
+    calib: /home/vkhare/DROID-SLAM/calib/tumvi.txt
+    camera_model: fisheye
+
+  - name: hilti_exp21_outside_building
+    root_folder: .data/hilti/2022/exp21_outside_building
+    input_folder: alphasense/cam0/image_raw
+    output_folder: droid-slam
+    calib: calib/hilti.txt
+    camera_model: fisheye
+
+  - name: reaper_143722
+    root_folder: .data/reaper/2026_02_05/rosbags/opsys_test_2026_02_05_143722
+    input_folder: camera/image
+    output_folder: droid-slam
+    calib: calib/reaper.txt
+    camera_model: radtan
+
+  - name: reaper_144239
+    root_folder: .data/reaper/2026_02_05/rosbags/opsys_test_2026_02_05_144239
+    input_folder: camera/image
+    output_folder: droid-slam
+    calib: calib/reaper.txt
+    camera_model: radtan
+
+  - name: reaper_144901
+    root_folder: .data/reaper/2026_02_05/rosbags/opsys_test_2026_02_05_144901
+    input_folder: camera/image
+    output_folder: droid-slam
+    calib: calib/reaper.txt
+    camera_model: radtan
