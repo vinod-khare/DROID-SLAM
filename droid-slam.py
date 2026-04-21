@@ -24,6 +24,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 
 RUN_CONFIG_ALLOWED_KEYS = {
     "name",
+    "skip",
     "root_folder",
     "input_folder",
     "output_folder",
@@ -423,23 +424,31 @@ def _run_batch_mode(args):
     print(f"📚 Loaded batch config: {args.runs_config} ({len(runs)} runs)")
 
     failures = 0
+    skipped = 0
+    succeeded = 0
     for idx, run in enumerate(runs, start=1):
         run_name = run.get("name", f"run_{idx:02d}")
         run_args_dict = copy.deepcopy(vars(args))
         run_args_dict.update(defaults)
         run_args_dict.update(run)
+
+        if bool(run_args_dict.get("skip", False)):
+            skipped += 1
+            print(f"⏭️  Skipping run: {run_name}")
+            continue
+
         run_args = argparse.Namespace(**run_args_dict)
 
         try:
             _run_tracking(run_args, run_name=run_name)
+            succeeded += 1
         except Exception as exc:
             failures += 1
             print(f"❌ Run failed: {run_name} ({exc})")
             if not args.continue_on_error:
                 raise
 
-    succeeded = len(runs) - failures
-    print(f"\n📊 Batch summary: {succeeded}/{len(runs)} succeeded, {failures} failed")
+    print(f"\n📊 Batch summary: {succeeded}/{len(runs)} succeeded, {skipped} skipped, {failures} failed")
     if failures > 0:
         sys.exit(1)
 

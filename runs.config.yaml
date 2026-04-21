@@ -3,6 +3,9 @@
 # Usage:
 #   python droid-slam.py --runs-config runs.example.yaml
 #   python droid-slam.py --runs-config runs.example.yaml --continue-on-error
+#
+# Per-run optional field:
+#   skip: true    # skip this dataset without deleting it
 
 defaults:
   buffer: 2048
