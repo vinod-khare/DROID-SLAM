@@ -37,10 +37,7 @@ RUN_CONFIG_ALLOWED_KEYS = {
 }
 
 
-def load_runs_config(config_path):
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f) or {}
-
+def validate_runs_config_data(config):
     if not isinstance(config, dict):
         raise ValueError("runs config must be a YAML mapping")
 
@@ -66,6 +63,18 @@ def load_runs_config(config_path):
     return defaults, runs
 
 
+def load_runs_config(config_path):
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+
+    return validate_runs_config_data(config)
+
+
+def save_runs_config(config_path, config):
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
 def build_convert_parser():
     parser = argparse.ArgumentParser(
         prog="droid-slam.py convert",
@@ -76,6 +85,15 @@ def build_convert_parser():
     parser.add_argument("--filter-threshold", type=float, default=0.005, help="consistency threshold used for point filtering (higher -> denser)")
     parser.add_argument("--filter-count", type=int, default=1, help="minimum number of supporting views per point (lower -> denser)")
     parser.add_argument("--min-disp-ratio", type=float, default=0.1, help="minimum disparity as fraction of mean (lower -> denser, 0.0 to disable)")
+    return parser
+
+
+def build_gui_parser():
+    parser = argparse.ArgumentParser(
+        prog="droid-slam.py gui",
+        description="Launch GUI for editing and running dataset configs",
+    )
+    parser.add_argument("--runs-config", type=str, required=True, help="path to YAML runs config")
     return parser
 
 

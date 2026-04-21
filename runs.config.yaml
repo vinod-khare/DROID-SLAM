@@ -3,6 +3,7 @@
 # Usage:
 #   python droid-slam.py --runs-config runs.config.yaml
 #   python droid-slam.py --runs-config runs.config.yaml --continue-on-error
+#   python droid-slam.py gui --runs-config runs.config.yaml
 #
 # Optional fields (can be set in defaults or per-run):
 #   skip: true
