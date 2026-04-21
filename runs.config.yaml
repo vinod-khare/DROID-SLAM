@@ -1,11 +1,18 @@
 # Batch run configuration for droid-slam.py
 #
 # Usage:
-#   python droid-slam.py --runs-config runs.example.yaml
-#   python droid-slam.py --runs-config runs.example.yaml --continue-on-error
+#   python droid-slam.py --runs-config runs.config.yaml
+#   python droid-slam.py --runs-config runs.config.yaml --continue-on-error
 #
-# Per-run optional field:
-#   skip: true    # skip this dataset without deleting it
+# Optional fields (can be set in defaults or per-run):
+#   skip: true
+#     Skip this dataset without deleting it from the file.
+#   target_width: <int>
+#   target_height: <int>
+#     Enable explicit resize before tracking.
+#     Both must be provided together.
+#     If omitted (default), native input resolution is used
+#     with only minimal crop to multiples of 8.
 
 defaults:
   buffer: 2048

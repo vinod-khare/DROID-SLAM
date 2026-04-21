@@ -52,6 +52,8 @@ RUN_CONFIG_ALLOWED_KEYS = {
     "backend_device",
     "camera_model",
     "filename_is_timestamp",
+    "target_width",
+    "target_height",
 }
 
 
@@ -108,6 +110,10 @@ def _run_tracking(args, run_name=None):
         raise ValueError("missing required input folder (--input-folder)")
     if not args.calib:
         raise ValueError("missing required calibration file (--calib)")
+    if (args.target_width is None) != (args.target_height is None):
+        raise ValueError("--target-width and --target-height must be provided together")
+    if args.target_width is not None and (args.target_width <= 0 or args.target_height <= 0):
+        raise ValueError("--target-width and --target-height must be positive")
 
     _resolve_run_paths(args)
 
@@ -135,13 +141,25 @@ def _run_tracking(args, run_name=None):
     print(f"\n📸 Input:  {args.input_folder}  ({total_images} images, stride={args.stride})")
     print(f"📁 Output: {args.output_folder}")
     print(f"🎛️  Buffer: {args.buffer} keyframes | filter_thresh={args.filter_thresh} | keyframe_thresh={args.keyframe_thresh}")
+    if args.target_width is None:
+        print("🖼️  Resize: native input resolution (cropped to multiples of 8)")
+    else:
+        print(f"🖼️  Resize: {args.target_width}x{args.target_height} (cropped to multiples of 8)")
     print(f"⚙️  Mode:   {'async' if args.asynchronous else 'sync'} | upsample={args.upsample}")
     print()
 
     all_tstamps = []
     frame_count = 0
     for (t, image, intrinsics) in tqdm(
-        image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp),
+        image_stream(
+            args.input_folder,
+            args.calib,
+            args.stride,
+            args.camera_model,
+            args.filename_is_timestamp,
+            args.target_width,
+            args.target_height,
+        ),
         desc="DROID-SLAM tracking",
         total=total_images,
         unit="frame",
@@ -165,7 +183,15 @@ def _run_tracking(args, run_name=None):
     print(f"🎬 Tracked {frame_count} frames → {droid.video.counter.value} keyframes retained")
 
     traj_est = droid.terminate(
-        image_stream(args.input_folder, args.calib, args.stride, args.camera_model, args.filename_is_timestamp)
+        image_stream(
+            args.input_folder,
+            args.calib,
+            args.stride,
+            args.camera_model,
+            args.filename_is_timestamp,
+            args.target_width,
+            args.target_height,
+        )
     )
 
     if args.output_folder is not None:
@@ -187,7 +213,15 @@ def show_image(image):
     cv2.imshow('image', image / 255.0)
     cv2.waitKey(1)
 
-def image_stream(imagedir, calib, stride, camera_model, filename_is_timestamp=True):
+def image_stream(
+    imagedir,
+    calib,
+    stride,
+    camera_model,
+    filename_is_timestamp=True,
+    target_width=None,
+    target_height=None,
+):
     """ image generator """
 
     calib = np.loadtxt(calib, delimiter=" ")
@@ -215,16 +249,21 @@ def image_stream(imagedir, calib, stride, camera_model, filename_is_timestamp=Tr
                 image = cv2.undistort(image, K, calib[4:])
 
         h0, w0, _ = image.shape
-        h1 = int(h0 * np.sqrt((384 * 512) / (h0 * w0)))
-        w1 = int(w0 * np.sqrt((384 * 512) / (h0 * w0)))
+        if target_width is not None and target_height is not None:
+            w1 = int(target_width)
+            h1 = int(target_height)
+            image = cv2.resize(image, (w1, h1))
+        else:
+            h1, w1 = h0, w0
 
-        image = cv2.resize(image, (w1, h1))
-        image = image[:h1-h1%8, :w1-w1%8]
+        h2 = h1 - (h1 % 8)
+        w2 = w1 - (w1 % 8)
+        image = image[:h2, :w2]
         image = torch.as_tensor(image).permute(2, 0, 1)
 
         intrinsics = torch.as_tensor([fx, fy, cx, cy])
-        intrinsics[0::2] *= (w1 / w0)
-        intrinsics[1::2] *= (h1 / h0)
+        intrinsics[0::2] *= (w2 / w0)
+        intrinsics[1::2] *= (h2 / h0)
 
         yield t, image[None], intrinsics
 
@@ -399,6 +438,8 @@ def _build_main_parser():
 
     parser.add_argument("--camera-model", type=str, default="radtan", choices=["radtan", "fisheye"], help="Camera model: radtan or fisheye")
     parser.add_argument("--filename-is-timestamp", action=argparse.BooleanOptionalAction, default=True, help="treat image filename stem as a nanosecond UNIX timestamp (default: enabled; use --no-filename-is-timestamp to disable)")
+    parser.add_argument("--target-width", type=int, default=None, help="optional target resize width before tracking; default uses native input width")
+    parser.add_argument("--target-height", type=int, default=None, help="optional target resize height before tracking; default uses native input height")
     parser.add_argument("--output-folder", type=str, default=None, help="folder to save reconstruction (.pt) and point cloud (.ply) (absolute or relative to --root-folder)")
     parser.add_argument("--runs-config", type=str, default=None, help="YAML file defining multiple dataset runs")
     parser.add_argument("--continue-on-error", action="store_true", help="in batch mode, continue running other datasets after an error")
